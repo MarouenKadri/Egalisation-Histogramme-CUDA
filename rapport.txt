@@ -1,0 +1,51 @@
+
+
+--- RGB HSV ---
+
+rgb2hsv_v1: Pour ce qui concerne l'adaptation GPU du calcul de conversion rgb vers hsv et inversement, nous avons commencer par calculer la valeur de Hue (teinte) dans une intervale entre 0 et 360 et la saturation S et la valeur V entre 0 et 100. nous avons simplement adapté le code de façon à se que chaque thread effectue la conversion d'un pixel. Nous avons ajouté une boucle while dans le cas où le nombre de thread serait insufisant par rapport au nombre de pixel à traiter. Ainsi par exemple le thread 4 va effectuer la conversion du pixel 4 puis du pixel blockDim.x*gridDim.x + 4 si ce pixel existe et ainsi de suite.
+
+rgb2hsv_v2: Or pour revenir en RGB notre convertisseur divisait de nouveau les valeurs pour obtenir un flottant entre 0 et 1. Nous avons donc supprimé ces multiplication par 360 et 100 pour chacune des 3 valeurs dans un flottant compris entre 0 et 1 ce qui nous permet d'économiser quelques calculc par conversion.
+
+rgb2hsv_v3: Nous avons réfléchi à utiliser de la mémoire partagé mais nous n'avons pas trouvé de manière intéressante de l'utiliser. En effet, nous avons pensé à charger respectivement les valeurs RGB et HSV dans la mémoire partagé pour effectuer les conversion mais en sachant que les valeurs sont utilisé qu'une seule fois, cela revient à charger ces éléments dans la mémoire partagé pour rien. Egalement nous ne pouvions séparer les taches car la conversion dépend de du chargement de ces valeurs donc impossible de gagner du temps par cette méthode.
+-0.05ms
+
+
+
+--- HISTOGRAMME ---
+
+compute_hist_v1: Nous avons réalisé une première version GPU naïve en utilisant uniquement la mémoire globale. Nous avons simplement adapté le code de façon à se que chaque thread ajoute la composante de son pixel dans un tableau d'histogramme global. Nous avons de nouveau ajouté une boucle while dans le cas où le nombre de thread serait insufisant par rapport au nombre de pixel à traiter.
+0.8ms
+
+compute_hist_v2: Nous avons ensuite réalisé une seconde version en utilisant la mémoire partagé. Chaque thread incrémente sa valeur dans le tableau partagé de son block puis une fusion de chacun de ces tableau est oppéré dans l'histogramme de la mémoire globale.
+-0.1ms
+
+compute_hist_v3: Ici chaque block charge les valeurs v dont elles ont besoin dans leur mémoire partagé pour travailler. Egalement le kernel est adapté pour un nombre de thread fixe de 1024, grâce à ça nous avons pu enlever des calculs inutile à cause des while. Nous avions cherché à initialiser les tableaux cache_v et cache_hist de manière parrallèle mais par définition cache_v a un nombre de cases égal au nombre de thread d'un block donc il y a forcément des threads qui se retrouveront à effectuer l'initialisation des deux tableaux, donc, notamment à cause du __syncthreads() nécessaire pour la suite, cette parralélisation demeure inintéressante. De la même manière, si on dédit une moitié à copier une case du tableau cache_hist et une autre moitié à copier chacun 2 cases du cache_v, le problème que un thread effectue 2 operation demeure.
+-0.02ms
+
+
+---REPARTITION---
+
+compute_repartition_v1: C'est une fonction GPU naïve appelé par compute_equalization_v1, une copie littérale de la version sequentielle. 
+
+compute_repartition_v2: Au lieu de recalculer à chaque fois la repartition pour chacun des pixels. Nous calculons une et une seule fois chacune des valeurs possible que nous stockons dans un tableau de la même taille que l'histogramme initialisé auparavent dans la mémoire GPU. Le calcul demeure malgré ça identique à la version 1 mise à part que chacune des valeurs est effectué par un thread.
+-1ms
+
+compute_repartition_v3: Pour cette 3ème version, vu que chacune des valeurs du tableau de répartition dépend de la valeur précedente, nous avons essayé de calculer de cette manière avec rep[n] = rep[n-1] + hist[n]. Vu que chaque valeurs dépend de la précedente, nous ne pouvons parralélisé le calcul, nous avons donc essayé de créer un kernel pour un seul thread.
++0.2ms
+
+compute_repartition_v4: Même si la 3ème version demande moins de calcul, elle demeure plus lente que la 2nd version. Ainsi nous sommes reparti dans sa direction en essayant d'amélioré le temps de calcul. Ainsi, à la place de calculer pour une valeur l avec une simple boucle de O(n), nous avons utilisé la parralélisation. Chaque thread aditionne 2 éléments, puis la moitié des threads fait additionne ces sommes et ainsi de suite. Grâce à cette technique, nous arrivons à un calcul en O(log2(n)) pour chaque calcul de valeur du tableau de répartition. Egalement évité les conflits de bank dans la mémoire partagé, chaque thread copie la valeur d'index tid avec l'index tid + stride, stride étant une variable se divisant en 2 jusqu'à 1.
+-0.2ms
+
+compute_repartition_v5: Enfin la 5ème version ajoute une optimisation de warp. Dès que cela est possible, c'est à dire dès que le nombre de thread actif passe en dessous de 32, on consacre le calcul sur un seul warp grace à une fonction GPU warpReduce.
+pareil
+
+
+---EQUALIZATION---
+
+compute_equalization_v1: Chaque thread calcul la répartition V d'un pixel en utilisant compute_repartition_v1.
+
+compute_equalization_v2: Effectue la même chose mise à part qu'elle utilise le précalculer de la repartition par compute_repartition_v2+.
+-1ms
+
+
+
